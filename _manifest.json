@@ -1,0 +1,39 @@
+{
+  "manifest_version": 2,
+  "version": "1.0.0",
+  "name": "自我信息插件 (Self Identity Plugin)",
+  "description": "为 Bot 提供基于人设图片的自我识别与自我信息检索能力",
+  "author": {
+    "name": "SengokuCola",
+    "url": "https://github.com/SengokuCola"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/SengokuCola/self_identity_plugin",
+    "homepage": "https://github.com/SengokuCola/self_identity_plugin",
+    "documentation": "https://github.com/Mai-with-u/maibot-plugin-sdk/blob/main/docs/guide.md",
+    "issues": "https://github.com/SengokuCola/self_identity_plugin/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.0.0"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [
+    "llm.generate",
+    "llm.get_available_models",
+    "message.get_by_id"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "locales_path": "_locales",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "id": "sengokucola.self-identity-plugin"
+}
