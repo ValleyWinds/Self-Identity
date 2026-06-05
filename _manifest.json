@@ -10,10 +10,10 @@
   "license": "MIT",
   "plugin_type": "chat",
   "urls": {
-    "repository": "https://github.com/SengokuCola/MaiBot-rdev",
-    "homepage": "https://github.com/SengokuCola/MaiBot-rdev",
-    "documentation": "https://github.com/Mai-with-u/maibot-plugin-sdk/blob/main/docs/guide.md",
-    "issues": "https://github.com/SengokuCola/MaiBot-rdev/issues"
+    "repository": "https://github.com/SengokuCola/self_identity_plugin",
+    "homepage": "https://github.com/SengokuCola/self_identity_plugin",
+    "documentation": "https://github.com/SengokuCola/self_identity_plugin/blob/main/README.md",
+    "issues": "https://github.com/SengokuCola/self_identity_plugin/issues"
   },
   "host_application": {
     "min_version": "1.0.0",
