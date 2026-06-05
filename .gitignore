@@ -4,3 +4,5 @@ __pycache__/
 .ruff_cache/
 .venv/
 venv/
+image_thumbup/*
+!image_thumbup/.gitkeep

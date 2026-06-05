@@ -9,15 +9,23 @@ from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
 import base64
+import hashlib
 import json
 import logging
 import re
 
+from PIL import Image
 from maibot_sdk import Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 
 _MAX_DOWNLOAD_IMAGE_BYTES = 15 * 1024 * 1024
+_SELF_IMAGE_DIR_NAME = "self_image"
+_SELF_IMAGE_THUMB_DIR_NAME = "image_thumbup"
+_SELF_IMAGE_THUMB_SIZE = (512, 512)
+_SELF_IMAGE_PAGE_SIZE = 10
+_SUPPORTED_SELF_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+_QQ_AVATAR_URL_TEMPLATE = "https://q1.qlogo.cn/g?b=qq&nk={qq_account}&s=640"
 logger = logging.getLogger("plugin.self_identity_plugin")
 
 
@@ -114,6 +122,15 @@ def _read_image_file(image_path: Path) -> Optional[Tuple[str, str]]:
     image_bytes = image_path.read_bytes()
     image_format = _guess_image_format_from_bytes(image_bytes, _guess_image_format_from_name(image_path.name))
     return image_format, _image_bytes_to_base64(image_bytes)
+
+
+def _build_image_mime_type(image_format: str) -> str:
+    """根据内部图片格式生成 MIME 类型。"""
+
+    normalized_format = (image_format or "png").strip().lower()
+    if normalized_format == "jpg":
+        normalized_format = "jpeg"
+    return f"image/{normalized_format}"
 
 
 def _resolve_file_url(file_url: str) -> Optional[Path]:
@@ -429,31 +446,23 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件")
-    config_version: str = Field(default="1.0.0", description="配置版本")
+    config_version: str = Field(default="1.3.0", description="配置版本")
 
 
 class IdentityImageConfig(PluginConfigBase):
-    """人设图片配置。"""
+    """人设图库配置。"""
 
     __ui_label__ = "人设图片"
     __ui_icon__ = "image"
     __ui_order__ = 1
 
-    image_path: str = Field(
-        default="",
-        description="Bot 人设图片路径，支持插件目录相对路径或绝对路径",
+    image_dir: str = Field(
+        default=_SELF_IMAGE_DIR_NAME,
+        description="人设原图目录，支持插件目录相对路径或绝对路径",
     )
-    image_base64: str = Field(
-        default="",
-        description="可选，直接填写图片 Base64 内容；填写后优先使用",
-    )
-    image_format: str = Field(
-        default="png",
-        description="当使用 Base64 方式配置图片时对应的图片格式",
-    )
-    compare_model: str = Field(
-        default="utils",
-        description="用于图片相似度判定的模型任务名，建议填写支持图片理解的模型",
+    thumbnail_dir: str = Field(
+        default=_SELF_IMAGE_THUMB_DIR_NAME,
+        description="人设图缩略图目录，支持插件目录相对路径或绝对路径",
     )
 
 
@@ -499,6 +508,8 @@ class SelfIdentityPlugin(MaiBotPlugin):
     async def on_load(self) -> None:
         """插件加载回调。"""
 
+        self._ensure_self_image_library()
+
     async def on_unload(self) -> None:
         """插件卸载回调。"""
 
@@ -509,29 +520,166 @@ class SelfIdentityPlugin(MaiBotPlugin):
         del config_data
         del version
 
-    def _resolve_identity_image(self) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """解析人设图片。"""
+    def _resolve_configured_dir(self, configured_path: str, default_name: str) -> Path:
+        """解析插件配置中的目录路径。"""
 
-        configured_base64 = self.config.identity_image.image_base64.strip()
-        configured_format = self.config.identity_image.image_format.strip().lower() or "png"
-        if configured_base64:
-            return configured_format, configured_base64, None
+        normalized_path = configured_path.strip() or default_name
+        directory_path = Path(normalized_path)
+        if not directory_path.is_absolute():
+            directory_path = (self.plugin_dir / directory_path).resolve()
+        return directory_path
 
-        configured_path = self.config.identity_image.image_path.strip()
-        if not configured_path:
-            return None, None, "尚未配置 Bot 的人设图片。"
+    @property
+    def self_image_dir(self) -> Path:
+        """返回人设原图目录。"""
 
-        image_path = Path(configured_path)
-        if not image_path.is_absolute():
-            image_path = (self.plugin_dir / image_path).resolve()
-        if not image_path.exists() or not image_path.is_file():
-            return None, None, f"人设图片不存在：{image_path}"
+        return self._resolve_configured_dir(self.config.identity_image.image_dir, _SELF_IMAGE_DIR_NAME)
+
+    @property
+    def self_image_thumbnail_dir(self) -> Path:
+        """返回人设图缩略图目录。"""
+
+        return self._resolve_configured_dir(self.config.identity_image.thumbnail_dir, _SELF_IMAGE_THUMB_DIR_NAME)
+
+    @staticmethod
+    def _is_supported_self_image(image_path: Path) -> bool:
+        """判断文件是否是支持的人设图片。"""
+
+        return image_path.is_file() and image_path.suffix.lower() in _SUPPORTED_SELF_IMAGE_SUFFIXES
+
+    @staticmethod
+    def _build_self_image_id(image_path: Path) -> str:
+        """根据文件名和路径生成稳定图片 ID。"""
+
+        identity_source = f"{image_path.name}|{image_path.resolve()}".encode("utf-8", errors="ignore")
+        return hashlib.sha1(identity_source).hexdigest()[:12]
+
+    def _build_thumbnail_path(self, image_path: Path) -> Path:
+        """构造某张人设图对应的缩略图路径。"""
+
+        image_id = self._build_self_image_id(image_path)
+        safe_stem = re.sub(r"[^0-9A-Za-z_.-]+", "_", image_path.stem).strip("._") or "self_image"
+        return self.self_image_thumbnail_dir / f"{safe_stem}_{image_id}.png"
+
+    def _ensure_self_image_library(self) -> None:
+        """确保人设图库目录存在，并为现有图片生成缩略图。"""
+
+        self.self_image_dir.mkdir(parents=True, exist_ok=True)
+        self.self_image_thumbnail_dir.mkdir(parents=True, exist_ok=True)
+        generated_count = 0
+        for image_path in self._list_self_image_paths(ensure_library=False):
+            thumbnail_path = self._build_thumbnail_path(image_path)
+            try:
+                source_mtime = image_path.stat().st_mtime
+                if thumbnail_path.exists() and thumbnail_path.stat().st_mtime >= source_mtime:
+                    continue
+                self._generate_thumbnail(image_path, thumbnail_path)
+                generated_count += 1
+            except Exception as exc:
+                logger.info("生成人设图缩略图失败：image=%s error=%s", image_path, exc, exc_info=True)
+        logger.info(
+            "人设图库检查完成：image_dir=%s thumbnail_dir=%s generated=%s",
+            self.self_image_dir,
+            self.self_image_thumbnail_dir,
+            generated_count,
+        )
+
+    @staticmethod
+    def _generate_thumbnail(image_path: Path, thumbnail_path: Path) -> None:
+        """生成单张人设图的缩略图。"""
+
+        thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+        with Image.open(image_path) as image:
+            image.thumbnail(_SELF_IMAGE_THUMB_SIZE, Image.Resampling.LANCZOS)
+            if image.mode not in {"RGB", "RGBA"}:
+                image = image.convert("RGBA")
+            image.save(thumbnail_path, format="PNG", optimize=True)
+
+    def _list_self_image_paths(self, ensure_library: bool = True) -> List[Path]:
+        """列出全部人设原图路径。"""
+
+        if ensure_library:
+            self._ensure_self_image_library()
+        if not self.self_image_dir.exists():
+            return []
+        return sorted(
+            (path for path in self.self_image_dir.iterdir() if self._is_supported_self_image(path)),
+            key=lambda path: path.name.lower(),
+        )
+
+    def _build_self_image_records(self, ensure_library: bool = True) -> List[Dict[str, Any]]:
+        """构造人设图库记录。"""
+
+        records: List[Dict[str, Any]] = []
+        for index, image_path in enumerate(self._list_self_image_paths(ensure_library=ensure_library), start=1):
+            records.append(
+                {
+                    "index": index,
+                    "id": self._build_self_image_id(image_path),
+                    "name": image_path.name,
+                    "path": image_path,
+                    "thumbnail_path": self._build_thumbnail_path(image_path),
+                }
+            )
+        return records
+
+    def _resolve_self_image_record(self, image_name: str = "", image_index: int = 0) -> Tuple[Optional[Dict[str, Any]], str]:
+        """按图片名称或序号解析人设图记录。"""
+
+        records = self._build_self_image_records()
+        if not records:
+            return None, f"人设图库为空，请先把图片放入 {self.self_image_dir}。"
+
+        normalized_name = image_name.strip()
+        if normalized_name:
+            for record in records:
+                if normalized_name in {str(record["name"]), str(record["id"])}:
+                    return record, ""
+            return None, f"没有找到名为或 ID 为 {normalized_name} 的人设图。"
+
+        try:
+            normalized_index = int(image_index or 0)
+        except (TypeError, ValueError):
+            normalized_index = 0
+
+        if normalized_index > 0:
+            if normalized_index <= len(records):
+                return records[normalized_index - 1], ""
+            return None, f"人设图序号超出范围：{normalized_index}，当前共有 {len(records)} 张。"
+
+        if len(records) == 1:
+            return records[0], ""
+        return None, "存在多张人设图，请提供 image_name 或 image_index 来选择一张。"
+
+    def _build_image_content_item(self, image_path: Path, name: str, metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """构造工具图片内容项。"""
 
         image_result = _read_image_file(image_path)
         if image_result is None:
-            return None, None, f"人设图片读取失败：{image_path}"
+            return None
         image_format, image_base64 = image_result
-        return image_format, image_base64, None
+        return {
+            "type": "image",
+            "data": image_base64,
+            "mime_type": _build_image_mime_type(image_format),
+            "name": name,
+            "metadata": metadata,
+        }
+
+    async def _resolve_bot_qq_account(self) -> Tuple[str, str]:
+        """从主配置读取 Bot 的 QQ 号。"""
+
+        try:
+            config_value = await self.ctx.config.get("bot.qq_account", "")
+        except Exception as exc:
+            return "", f"读取 bot.qq_account 失败：{type(exc).__name__}: {exc}"
+
+        qq_account = str(config_value or "").strip()
+        if qq_account in {"", "0"}:
+            return "", "当前未配置 bot.qq_account，无法获取自己的 QQ 头像。"
+        if not qq_account.isdigit():
+            return "", f"bot.qq_account 不是有效 QQ 号：{qq_account}"
+        return qq_account, ""
 
     @staticmethod
     def _extract_image_from_message(message: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -705,21 +853,6 @@ class SelfIdentityPlugin(MaiBotPlugin):
             raise RuntimeError("message.get_by_id 返回的 message 字段格式异常。")
         return direct_message
 
-    async def _resolve_compare_model(self) -> str:
-        """选择图片比对模型。"""
-
-        preferred_model = self.config.identity_image.compare_model.strip()
-        available_models = await self.ctx.llm.get_available_models()
-        if preferred_model and preferred_model in available_models:
-            return preferred_model
-        if "utils" in available_models:
-            return "utils"
-        if preferred_model:
-            return preferred_model
-        if available_models:
-            return available_models[0]
-        return ""
-
     @staticmethod
     def _score_info_item(item: IdentityInfoItem, title: str, keyword: str, query: str) -> float:
         """计算信息项匹配分数。"""
@@ -845,265 +978,259 @@ class SelfIdentityPlugin(MaiBotPlugin):
         }
 
     @Tool(
-        "identiy_myself_in_pic",
-        description="当有人发送人物或角色图片时，使用此工具来检查该角色是否与自身一致",
+        "view_all_image",
+        description=(
+            "浏览所有 Bot 人设图片的缩略图版本。每页最多显示 10 张；如果图片超过 10 张，可以通过 page 参数选择页码。"
+            "返回结果中的 index、name 或 id 可用于 get_self_image 获取原始大小图片。"
+        ),
         parameters=[
-            _tool_param("msg_id", ToolParamType.STRING, "要比对的消息 ID", True),
+            _tool_param("page", ToolParamType.INTEGER, "要浏览的页码，从 1 开始", False),
         ],
     )
-    async def handle_identiy_myself_in_pic(
+    async def handle_view_all_image(
         self,
-        msg_id: str = "",
-        stream_id: str = "",
+        page: int = 1,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """判定目标图片与 Bot 人设图的差异度。"""
+        """分页返回所有人设图缩略图。"""
 
-        normalized_msg_id = msg_id.strip()
-        normalized_stream_id = stream_id.strip()
-        tool_debug_info: Dict[str, Any] = {
-            "msg_id": normalized_msg_id,
-            "stream_id_present": bool(normalized_stream_id),
-            "target_message_found": False,
-        }
-        logger.info(
-            "identiy_myself_in_pic 工具调用开始：msg_id=%s stream_id_present=%s kwargs_keys=%s",
-            normalized_msg_id,
-            bool(normalized_stream_id),
-            sorted(str(key) for key in kwargs.keys()),
-        )
-        if not normalized_msg_id:
-            logger.info("identiy_myself_in_pic 工具调用失败：缺少 msg_id")
-            return _build_identity_tool_unavailable_result("缺少 msg_id，无法进行图片比对。", tool_debug_info)
-        if not normalized_stream_id:
-            logger.info("identiy_myself_in_pic 工具调用失败：缺少 stream_id，msg_id=%s", normalized_msg_id)
-            return _build_identity_tool_unavailable_result(
-                "缺少当前会话 stream_id，无法按消息 ID 查找图片。",
-                tool_debug_info,
-            )
+        del kwargs
 
         try:
-            identity_format, identity_base64, identity_error = self._resolve_identity_image()
-            if identity_error is not None:
-                logger.info("identiy_myself_in_pic 人设图解析失败：msg_id=%s reason=%s", normalized_msg_id, identity_error)
-                return _build_identity_tool_unavailable_result(identity_error, tool_debug_info)
-            tool_debug_info["identity_image_format"] = identity_format
-            logger.info(
-                "identiy_myself_in_pic 人设图解析成功：msg_id=%s identity_format=%s",
-                normalized_msg_id,
-                identity_format,
-            )
+            records = self._build_self_image_records()
+            total_count = len(records)
+            if total_count == 0:
+                return {
+                    "success": False,
+                    "content": f"人设图库为空，请先把图片放入 {self.self_image_dir}。",
+                    "images": [],
+                }
 
-            target_message = await self._find_message_by_id(
-                normalized_stream_id,
-                normalized_msg_id,
-            )
-            if target_message is None:
-                logger.info(
-                    "identiy_myself_in_pic 未找到目标消息：msg_id=%s",
-                    normalized_msg_id,
+            total_pages = max(1, (total_count + _SELF_IMAGE_PAGE_SIZE - 1) // _SELF_IMAGE_PAGE_SIZE)
+            try:
+                requested_page = int(page or 1)
+            except (TypeError, ValueError):
+                requested_page = 1
+            normalized_page = min(max(1, requested_page), total_pages)
+            start_index = (normalized_page - 1) * _SELF_IMAGE_PAGE_SIZE
+            page_records = records[start_index : start_index + _SELF_IMAGE_PAGE_SIZE]
+            content_items = []
+            serialized_images = []
+            for record in page_records:
+                thumbnail_path = record["thumbnail_path"]
+                content_item = self._build_image_content_item(
+                    thumbnail_path,
+                    f"thumb_{record['index']}_{record['name']}.png",
+                    {
+                        "source": "self_identity_plugin",
+                        "usage": "self_identity_thumbnail",
+                        "image_index": record["index"],
+                        "image_id": record["id"],
+                        "image_name": record["name"],
+                    },
                 )
-                return _build_identity_tool_unavailable_result(
-                    f"未找到消息 ID 为 {normalized_msg_id} 的消息。",
-                    tool_debug_info,
-                )
-            tool_debug_info["target_message_found"] = True
-            tool_debug_info["target_message_keys"] = sorted(str(key) for key in target_message.keys())
-            logger.info(
-                "identiy_myself_in_pic 找到目标消息：msg_id=%s message_keys=%s",
-                normalized_msg_id,
-                tool_debug_info["target_message_keys"],
-            )
-
-            target_format, target_base64, target_error, image_debug_info = self._extract_image_from_message_with_debug(
-                target_message
-            )
-            tool_debug_info["image_extract"] = image_debug_info
-            if target_error is not None:
-                logger.info(
-                    "identiy_myself_in_pic 目标图片解析失败：msg_id=%s reason=%s debug=%s",
-                    normalized_msg_id,
-                    target_error,
-                    image_debug_info,
-                )
-                return _build_identity_tool_unavailable_result(target_error, tool_debug_info)
-            tool_debug_info["target_image_format"] = target_format
-            logger.info(
-                "identiy_myself_in_pic 目标图片解析成功：msg_id=%s target_format=%s",
-                normalized_msg_id,
-                target_format,
-            )
-
-            model_name = await self._resolve_compare_model()
-            if not model_name:
-                logger.info("identiy_myself_in_pic 无可用模型：msg_id=%s", normalized_msg_id)
-                return _build_identity_tool_unavailable_result(
-                    "当前没有可用的 LLM 模型，无法执行图片比对。",
-                    tool_debug_info,
-                )
-            tool_debug_info["model"] = model_name
-            logger.info("identiy_myself_in_pic 开始调用模型比对：msg_id=%s model=%s", normalized_msg_id, model_name)
-
-            prompt_messages: List[Dict[str, Any]] = [
-                {
-                    "role": "system",
-                    "content": (
-                        "你是一个图片差异分析助手。"
-                        "请比较两张图片是否在表达同一个角色、同一个人设或同一视觉身份。"
-                        "请同时关注相似点和差异点，重点参考发型、瞳色、服装、配饰、主题元素、色彩与整体气质。"
-                        "不要因为姿势、背景、裁剪或轻微画风变化就直接判定完全不同。"
-                        "只输出 JSON，不要输出额外解释。"
-                        'JSON 格式必须为 {"similar": true/false, "difference_level": "low|medium|high", "confidence": "high|medium|low", "reason": "...", "matched_points": ["..."], "difference_points": ["..."]}。'
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "第一张图是 Bot 的人设图。"},
-                        {
-                            "type": "image",
-                            "image_format": identity_format,
-                            "image_base64": identity_base64,
-                        },
-                        {"type": "text", "text": "第二张图是待判定消息中的图片。"},
-                        {
-                            "type": "image",
-                            "image_format": target_format,
-                            "image_base64": target_base64,
-                        },
-                        {
-                            "type": "text",
-                            "text": "请判断这两张图的人设差异度，并给出是否相似、差异等级、相似点、差异点和总体原因。",
-                        },
-                    ],
-                },
-            ]
-
-            llm_result = await self.ctx.llm.generate(
-                prompt=prompt_messages,
-                model=model_name,
-                temperature=0.1,
-                max_tokens=600,
-            )
-            if not llm_result.get("success"):
-                tool_debug_info["llm_error"] = str(llm_result.get("error") or "").strip()
-                logger.info(
-                    "identiy_myself_in_pic 模型调用失败：msg_id=%s model=%s error=%s",
-                    normalized_msg_id,
-                    model_name,
-                    tool_debug_info["llm_error"] or "模型调用失败",
-                )
-                return _build_identity_tool_unavailable_result(
-                    f"图片差异度判定失败：{llm_result.get('error') or '模型调用失败'}",
-                    tool_debug_info,
+                if content_item is not None:
+                    content_items.append(content_item)
+                serialized_images.append(
+                    {
+                        "index": record["index"],
+                        "id": record["id"],
+                        "name": record["name"],
+                    }
                 )
 
-            response_text, reasoning_text = _extract_llm_text_pair(llm_result)
-            parsed_result = _extract_json_object(response_text)
-            parsed_from = "response"
-            if not parsed_result and reasoning_text:
-                parsed_result = _extract_json_object(reasoning_text)
-                parsed_from = "reasoning"
-
-            tool_debug_info["llm_response"] = {
-                "result_keys": sorted(str(key) for key in llm_result.keys()),
-                "response_len": len(response_text),
-                "reasoning_len": len(reasoning_text),
-                "response_preview": _safe_preview(response_text),
-                "reasoning_preview": _safe_preview(reasoning_text),
-                "parsed_from": parsed_from if parsed_result else "",
-                "parsed_keys": sorted(str(key) for key in parsed_result.keys()),
+            image_lines = [f"{image['index']}. {image['name']}（id: {image['id']}）" for image in serialized_images]
+            content = (
+                f"人设图库第 {normalized_page}/{total_pages} 页，共 {total_count} 张。"
+                "可使用 get_self_image 的 image_index、image_name 或 id 获取原图。\n"
+                + "\n".join(image_lines)
+            )
+            return {
+                "success": True,
+                "content": content.strip(),
+                "page": normalized_page,
+                "page_size": _SELF_IMAGE_PAGE_SIZE,
+                "total_pages": total_pages,
+                "total_count": total_count,
+                "images": serialized_images,
+                "content_items": content_items,
             }
-            logger.info(
-                "identiy_myself_in_pic 模型返回解析：msg_id=%s model=%s response_len=%s reasoning_len=%s parsed_keys=%s parsed_from=%s",
-                normalized_msg_id,
-                model_name,
-                len(response_text),
-                len(reasoning_text),
-                tool_debug_info["llm_response"]["parsed_keys"],
-                tool_debug_info["llm_response"]["parsed_from"],
-            )
-            if not parsed_result:
+        except Exception as exc:
+            logger.info("view_all_image 工具异常：error=%s", exc, exc_info=True)
+            return _build_identity_tool_unavailable_result(f"浏览人设图库失败：{type(exc).__name__}: {exc}")
+
+    @Tool(
+        "get_self_avatar",
+        description="当需要查看、展示或引用你自己的 QQ 头像时调用，会根据 bot.qq_account 获取高清 QQ 头像并作为工具图片返回。",
+        parameters=[],
+    )
+    async def handle_get_self_avatar(
+        self,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """获取并返回 Bot 自己的 QQ 头像。"""
+
+        tool_debug_info: Dict[str, Any] = {
+            "kwargs_keys": sorted(str(key) for key in kwargs.keys()),
+        }
+
+        try:
+            qq_account, resolve_error = await self._resolve_bot_qq_account()
+            if resolve_error:
+                logger.info("get_self_avatar QQ 号解析失败：reason=%s", resolve_error)
+                return _build_identity_tool_unavailable_result(resolve_error, tool_debug_info)
+
+            avatar_url = _QQ_AVATAR_URL_TEMPLATE.format(qq_account=qq_account)
+            tool_debug_info["qq_account"] = qq_account
+            tool_debug_info["avatar_url"] = avatar_url
+
+            try:
+                image_result = _download_image_url(avatar_url)
+            except Exception as exc:
+                logger.info("get_self_avatar 头像下载失败：qq=%s error=%s", qq_account, exc, exc_info=True)
                 return _build_identity_tool_unavailable_result(
-                    "图片差异度判定失败：模型调用成功，但没有返回可解析的 JSON 判定结果。",
+                    f"QQ 头像下载失败：{type(exc).__name__}: {exc}",
                     tool_debug_info,
                 )
+            if image_result is None:
+                return _build_identity_tool_unavailable_result("QQ 头像下载失败：返回内容不是有效图片。", tool_debug_info)
 
-            similar = _coerce_bool(_pick_first_present(parsed_result, ["similar", "is_similar", "same", "是否相似"]))
-            difference_level = _normalize_choice(
-                _pick_first_present(parsed_result, ["difference_level", "diff_level", "difference", "差异度"]),
-                ["low", "medium", "high"],
-                {
-                    "低": "low",
-                    "较低": "low",
-                    "小": "low",
-                    "中": "medium",
-                    "中等": "medium",
-                    "一般": "medium",
-                    "高": "high",
-                    "较高": "high",
-                    "大": "high",
-                },
-                "unknown",
-            )
-            confidence = _normalize_choice(
-                _pick_first_present(parsed_result, ["confidence", "置信度"]),
-                ["low", "medium", "high"],
-                {
-                    "低": "low",
-                    "较低": "low",
-                    "中": "medium",
-                    "中等": "medium",
-                    "高": "high",
-                    "较高": "high",
-                },
-                "unknown",
-            )
-            reason = str(_pick_first_present(parsed_result, ["reason", "summary", "explanation", "总体说明", "原因"], "")).strip()
-            if not reason:
-                return _build_identity_tool_unavailable_result(
-                    "图片差异度判定失败：模型返回 JSON 中缺少 reason/原因。",
-                    tool_debug_info,
-                )
-            matched_points = _to_plain_list(_pick_first_present(parsed_result, ["matched_points", "similar_points", "相似点"], []))
-            difference_points = _to_plain_list(
-                _pick_first_present(parsed_result, ["difference_points", "different_points", "差异点"], [])
-            )
-
-            content_lines = [
-                f"判定结果：{'相似' if similar else '不相似'}",
-                f"差异度：{difference_level}",
-                f"置信度：{confidence}",
-                f"总体说明：{reason}",
-            ]
-            if matched_points:
-                content_lines.append(f"相似点：{'、'.join(matched_points)}")
-            if difference_points:
-                content_lines.append(f"差异点：{'、'.join(difference_points)}")
+            image_format, image_base64 = image_result
+            image_format = (image_format or "png").strip().lower()
+            image_suffix = "jpg" if image_format == "jpeg" else image_format
+            mime_type = _build_image_mime_type(image_format)
+            tool_debug_info["image_format"] = image_format
+            tool_debug_info["image_base64_len"] = len(image_base64 or "")
 
             return {
                 "success": True,
-                "content": "\n".join(content_lines),
-                "similar": similar,
-                "difference_level": difference_level,
-                "confidence": confidence,
-                "reason": reason,
-                "matched_points": matched_points,
-                "difference_points": difference_points,
-                "target_message_id": normalized_msg_id,
-                "model": llm_result.get("model", model_name),
-                "raw_response": response_text,
+                "content": f"已获取 Bot 自己的 QQ 头像（QQ：{qq_account}）。",
+                "qq_account": qq_account,
+                "avatar_url": avatar_url,
+                "image_format": image_format,
+                "image_base64": image_base64,
+                "mime_type": mime_type,
+                "content_items": [
+                    {
+                        "type": "image",
+                        "data": image_base64,
+                        "mime_type": mime_type,
+                        "name": f"self_avatar_{qq_account}.{image_suffix}",
+                        "metadata": {
+                            "source": "self_identity_plugin",
+                            "usage": "self_avatar",
+                            "qq_account": qq_account,
+                            "avatar_url": avatar_url,
+                        },
+                    }
+                ],
+                "debug_info": tool_debug_info,
+            }
+        except Exception as exc:
+            tool_debug_info["exception"] = f"{type(exc).__name__}: {exc}"
+            logger.info("get_self_avatar 工具异常：error=%s", tool_debug_info["exception"], exc_info=True)
+            return _build_identity_tool_unavailable_result(
+                f"获取自己的头像失败：{type(exc).__name__}: {exc}",
+                tool_debug_info,
+            )
+
+    @Tool(
+        "get_self_image",
+        description=(
+            "获取某张 Bot 人设图片的原始大小版本，并作为工具图片返回。"
+            "可以使用 view_all_image 返回的 image_index、image_name 或 id 选择图片。"
+        ),
+        parameters=[
+            _tool_param("image_index", ToolParamType.INTEGER, "图片序号，从 1 开始；可从 view_all_image 返回结果中获取", False),
+            _tool_param("image_name", ToolParamType.STRING, "图片文件名或 id；可从 view_all_image 返回结果中获取", False),
+        ],
+    )
+    async def handle_get_self_image(
+        self,
+        image_index: int = 0,
+        image_name: str = "",
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """返回指定人设图原图，供主模型自行进行图片判断。"""
+
+        tool_debug_info: Dict[str, Any] = {
+            "image_index": image_index,
+            "image_name": image_name.strip(),
+            "kwargs_keys": sorted(str(key) for key in kwargs.keys()),
+        }
+        logger.info(
+            "get_self_image 工具调用开始：image_index=%s image_name=%s kwargs_keys=%s",
+            image_index,
+            image_name,
+            tool_debug_info["kwargs_keys"],
+        )
+
+        try:
+            record, resolve_error = self._resolve_self_image_record(image_name=image_name, image_index=image_index)
+            if record is None:
+                logger.info("get_self_image 人设图解析失败：reason=%s", resolve_error)
+                return _build_identity_tool_unavailable_result(resolve_error, tool_debug_info)
+
+            image_path = record["path"]
+            image_result = _read_image_file(image_path)
+            if image_result is None:
+                return _build_identity_tool_unavailable_result(f"人设图片读取失败：{image_path}", tool_debug_info)
+
+            image_format, image_base64 = image_result
+            image_format = (image_format or "png").strip().lower()
+            mime_type = _build_image_mime_type(image_format)
+            tool_debug_info["image_format"] = image_format
+            tool_debug_info["image_base64_len"] = len(image_base64 or "")
+            tool_debug_info["resolved_image"] = {
+                "index": record["index"],
+                "id": record["id"],
+                "name": record["name"],
+            }
+            logger.info(
+                "get_self_image 人设图解析成功：index=%s name=%s image_format=%s base64_len=%s",
+                record["index"],
+                record["name"],
+                image_format,
+                tool_debug_info["image_base64_len"],
+            )
+            return {
+                "success": True,
+                "content": (
+                    f"已返回第 {record['index']} 张 Bot 人设原图：{record['name']}。"
+                    "请将这张图片作为自我形象参考，与当前对话中的目标图片自行进行视觉判断。"
+                ),
+                "image_index": record["index"],
+                "image_id": record["id"],
+                "image_name": record["name"],
+                "image_format": image_format,
+                "image_base64": image_base64,
+                "mime_type": mime_type,
+                "content_items": [
+                    {
+                        "type": "image",
+                        "data": image_base64,
+                        "mime_type": mime_type,
+                        "name": str(record["name"]),
+                        "metadata": {
+                            "source": "self_identity_plugin",
+                            "usage": "self_identity_reference",
+                            "image_index": record["index"],
+                            "image_id": record["id"],
+                            "image_name": record["name"],
+                        },
+                    }
+                ],
+                "debug_info": tool_debug_info,
             }
         except Exception as exc:
             tool_debug_info["exception"] = f"{type(exc).__name__}: {exc}"
             logger.info(
-                "identiy_myself_in_pic 工具异常：msg_id=%s error=%s",
-                normalized_msg_id,
+                "get_self_image 工具异常：error=%s",
                 tool_debug_info["exception"],
                 exc_info=True,
             )
             return _build_identity_tool_unavailable_result(
-                f"图片比对工具暂时不可用：{type(exc).__name__}: {exc}",
+                f"人设图片工具暂时不可用：{type(exc).__name__}: {exc}",
                 tool_debug_info,
             )
 
