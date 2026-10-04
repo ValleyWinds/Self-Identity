@@ -15,6 +15,14 @@
 
 需要 MaiBot 1.3.0 或更高版本；插件 ID 为 `valleywinds.self-identity`。
 
+## 从旧版迁移（sengokucola.self-identity-plugin）
+
+> ⚠️ 新版配置文件与旧版不兼容（`infos` 从顶层移到了 `infos_section` 节内）。**请先不要卸载旧插件**，等迁移完成后再卸载。
+
+1. 安装本插件（此时旧插件暂时保留）。
+2. 参考旧插件 `config.toml` 里你写的 `[[infos]]` 内容，把自我信息填到新插件配置页（或新配置的 `[[infos_section.infos]]`）；人设图片复制到新插件目录的 `self_image` 文件夹。
+3. 确认新插件工作正常后，禁用或卸载旧插件（新旧版本三个工具同名，同时启用会冲突）。
+
 ## 配置
 
 安装后在 WebUI 插件配置页（或插件目录的 `config.toml`）中修改：
