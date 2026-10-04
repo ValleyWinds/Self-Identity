@@ -10,7 +10,6 @@ from urllib.request import Request, urlopen
 
 import base64
 import hashlib
-import json
 import logging
 import re
 
@@ -33,27 +32,6 @@ def _tool_param(name: str, param_type: ToolParamType, description: str, required
     """构造工具参数声明。"""
 
     return ToolParameterInfo(name=name, param_type=param_type, description=description, required=required)
-
-
-def _extract_nested_mapping(payload: Any) -> Dict[str, Any]:
-    """从 capability 返回值中剥离常见包装层，取出业务字典。"""
-
-    current = payload
-    visited: set[int] = set()
-    while isinstance(current, dict):
-        current_id = id(current)
-        if current_id in visited:
-            break
-        visited.add(current_id)
-
-        for wrapper_key in ("result", "data"):
-            nested_value = current.get(wrapper_key)
-            if isinstance(nested_value, dict):
-                current = nested_value
-                break
-        else:
-            return current
-    return {}
 
 
 def _guess_image_format_from_name(file_name: str, default: str = "png") -> str:
@@ -87,33 +65,6 @@ def _image_bytes_to_base64(image_bytes: bytes) -> str:
     return base64.b64encode(image_bytes).decode("utf-8")
 
 
-def _decode_base64_image(raw_base64: str) -> Optional[Tuple[str, str]]:
-    """解析普通 Base64 或 data URL 图片内容。"""
-
-    normalized_base64 = raw_base64.strip()
-    if not normalized_base64:
-        return None
-
-    image_format = "png"
-    data_url_match = re.match(
-        r"^data:image/(?P<format>[a-zA-Z0-9.+-]+);base64,(?P<data>.+)$",
-        normalized_base64,
-        re.DOTALL,
-    )
-    if data_url_match is not None:
-        image_format = data_url_match.group("format").lower()
-        normalized_base64 = data_url_match.group("data").strip()
-
-    try:
-        image_bytes = base64.b64decode(normalized_base64, validate=True)
-    except Exception:
-        return None
-    if not image_bytes:
-        return None
-
-    return _guess_image_format_from_bytes(image_bytes, image_format), _image_bytes_to_base64(image_bytes)
-
-
 def _read_image_file(image_path: Path) -> Optional[Tuple[str, str]]:
     """读取本地图片文件并返回格式与 Base64。"""
 
@@ -131,18 +82,6 @@ def _build_image_mime_type(image_format: str) -> str:
     if normalized_format == "jpg":
         normalized_format = "jpeg"
     return f"image/{normalized_format}"
-
-
-def _resolve_file_url(file_url: str) -> Optional[Path]:
-    """将 file:// URL 转换为本地路径。"""
-
-    parsed_url = urlparse(file_url)
-    if parsed_url.scheme.lower() != "file":
-        return None
-
-    if parsed_url.netloc and parsed_url.path:
-        return Path(f"//{parsed_url.netloc}{unquote(parsed_url.path)}")
-    return Path(unquote(parsed_url.path))
 
 
 def _download_image_url(image_url: str) -> Optional[Tuple[str, str]]:
@@ -166,265 +105,6 @@ def _download_image_url(image_url: str) -> Optional[Tuple[str, str]]:
     return image_format, _image_bytes_to_base64(image_bytes)
 
 
-def _safe_preview(value: Any, max_length: int = 160) -> str:
-    """构造适合日志输出的短预览，避免泄漏图片二进制内容。"""
-
-    if isinstance(value, dict):
-        return f"<dict keys={sorted(str(key) for key in value.keys())}>"
-    if isinstance(value, list):
-        return f"<list len={len(value)}>"
-
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    if text.startswith("data:image/"):
-        header = text.split(",", 1)[0]
-        return f"{header},<base64 len={max(0, len(text) - len(header) - 1)}>"
-    if len(text) > max_length:
-        return f"{text[:max_length]}...<len={len(text)}>"
-    return text
-
-
-def _classify_image_reference(reference: str) -> str:
-    """判断图片引用类型，用于调试信息。"""
-
-    normalized_reference = reference.strip()
-    if not normalized_reference:
-        return "empty"
-    if normalized_reference.startswith("data:image/"):
-        return "data_url"
-    if _is_windows_drive_path(normalized_reference):
-        return "path_or_text"
-
-    parsed_url = urlparse(normalized_reference)
-    normalized_scheme = parsed_url.scheme.lower()
-    if normalized_scheme:
-        return normalized_scheme
-    if re.fullmatch(r"[A-Za-z0-9+/=\s]+", normalized_reference) and len(normalized_reference) > 64:
-        return "base64"
-    return "path_or_text"
-
-
-def _is_windows_drive_path(reference: str) -> bool:
-    """判断字符串是否像 Windows 盘符路径。"""
-
-    return bool(re.match(r"^[A-Za-z]:[\\/]", reference.strip()))
-
-
-def _read_image_reference_with_reason(reference: str) -> Tuple[Optional[Tuple[str, str]], str]:
-    """从图片引用读取图片，并返回失败原因。"""
-
-    normalized_reference = reference.strip()
-    if not normalized_reference:
-        return None, "empty_reference"
-
-    decoded_base64 = _decode_base64_image(normalized_reference)
-    if decoded_base64 is not None:
-        return decoded_base64, "base64_ok"
-
-    parsed_url = urlparse(normalized_reference)
-    normalized_scheme = parsed_url.scheme.lower()
-    if not _is_windows_drive_path(normalized_reference):
-        if normalized_scheme == "file":
-            file_path = _resolve_file_url(normalized_reference)
-            if file_path is None:
-                return None, "file_url_unresolved"
-            image_result = _read_image_file(file_path)
-            return image_result, "file_url_ok" if image_result is not None else f"file_not_found:{file_path}"
-        if normalized_scheme in {"http", "https"}:
-            try:
-                image_result = _download_image_url(normalized_reference)
-            except Exception as exc:
-                return None, f"url_download_error:{type(exc).__name__}: {exc}"
-            return image_result, "url_ok" if image_result is not None else "url_not_image_or_too_large"
-        if normalized_scheme:
-            return None, f"unsupported_scheme:{normalized_scheme}"
-
-    try:
-        image_path = Path(normalized_reference)
-    except OSError as exc:
-        return None, f"path_parse_error:{type(exc).__name__}: {exc}"
-    image_result = _read_image_file(image_path)
-    return image_result, "path_ok" if image_result is not None else f"path_not_found:{image_path}"
-
-
-def _read_image_reference(reference: str) -> Optional[Tuple[str, str]]:
-    """从本地路径、file URL、http(s) URL、data URL 或 Base64 引用中读取图片。"""
-
-    image_result, _ = _read_image_reference_with_reason(reference)
-    return image_result
-
-
-def _extract_image_hash(component: Dict[str, Any]) -> str:
-    """从图片消息段中提取图片 hash。"""
-
-    for key in ("hash", "binary_hash", "image_hash", "file_hash"):
-        value = str(component.get(key) or "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _read_cached_image_by_hash_with_reason(image_hash: str) -> Tuple[Optional[Tuple[str, str]], str]:
-    """通过图片 hash 从本地图片缓存数据库读取图片，并返回失败原因。"""
-
-    if not image_hash:
-        return None, "empty_hash"
-
-    try:
-        from sqlmodel import select
-
-        from src.common.database.database import get_db_session
-        from src.common.database.database_model import Images, ImageType
-
-        with get_db_session() as db:
-            statement = select(Images).filter_by(image_hash=image_hash, image_type=ImageType.IMAGE).limit(1)
-            image_record = db.exec(statement).first()
-            if image_record is None or getattr(image_record, "no_file_flag", False):
-                return None, "cache_record_not_found_or_no_file"
-            raw_full_path = str(image_record.full_path or "").strip()
-
-        if not raw_full_path:
-            return None, "cache_record_empty_path"
-
-        image_path = Path(raw_full_path).expanduser().resolve()
-        image_result = _read_image_file(image_path)
-        return image_result, "cache_file_ok" if image_result is not None else f"cache_file_not_found:{image_path}"
-    except Exception as exc:
-        return None, f"cache_lookup_error:{type(exc).__name__}: {exc}"
-
-
-def _read_cached_image_by_hash(image_hash: str) -> Optional[Tuple[str, str]]:
-    """通过图片 hash 从本地图片缓存数据库读取图片。"""
-
-    image_result, _ = _read_cached_image_by_hash_with_reason(image_hash)
-    return image_result
-
-
-def _iter_image_reference_values(value: Any) -> List[str]:
-    """从图片消息段 data 或附加字段中收集可能的图片引用。"""
-
-    if isinstance(value, dict):
-        references: List[str] = []
-        for key in ("binary_data_base64", "base64", "data_url", "url", "file", "file_path", "path", "data"):
-            references.extend(_iter_image_reference_values(value.get(key)))
-        return references
-
-    if isinstance(value, list):
-        references = []
-        for item in value:
-            references.extend(_iter_image_reference_values(item))
-        return references
-
-    normalized_value = str(value or "").strip()
-    if not normalized_value:
-        return []
-    if normalized_value.startswith("[") and normalized_value.endswith("]") and not normalized_value.startswith("[CQ:"):
-        return []
-
-    references = [normalized_value]
-    cq_url_match = re.search(r"(?:url|file|path)=([^,\]]+)", normalized_value)
-    if cq_url_match is not None:
-        references.append(cq_url_match.group(1).strip())
-    return references
-
-
-def _extract_json_object(text: str) -> Dict[str, Any]:
-    """从模型输出中提取 JSON 对象。"""
-
-    normalized_text = str(text or "").strip()
-    if not normalized_text:
-        return {}
-
-    candidates = [normalized_text]
-    if normalized_text.startswith("```"):
-        fenced_text = normalized_text.strip("`").strip()
-        if fenced_text.lower().startswith("json"):
-            fenced_text = fenced_text[4:].strip()
-        candidates.append(fenced_text)
-    match = re.search(r"\{.*\}", normalized_text, re.DOTALL)
-    if match is not None:
-        candidates.append(match.group(0))
-
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return {}
-
-
-def _extract_llm_text_pair(llm_result: Dict[str, Any]) -> Tuple[str, str]:
-    """从 LLM 能力返回中提取正文与推理文本。"""
-
-    response_candidates = [
-        llm_result.get("response"),
-        llm_result.get("content"),
-        llm_result.get("text"),
-        llm_result.get("output"),
-    ]
-    completion = llm_result.get("completion")
-    if isinstance(completion, dict):
-        response_candidates.extend(
-            [
-                completion.get("response"),
-                completion.get("content"),
-                completion.get("text"),
-                completion.get("output"),
-            ]
-        )
-
-    response_text = ""
-    for candidate in response_candidates:
-        normalized_candidate = str(candidate or "").strip()
-        if normalized_candidate:
-            response_text = normalized_candidate
-            break
-
-    reasoning_text = str(llm_result.get("reasoning") or "").strip()
-    return response_text, reasoning_text
-
-
-def _pick_first_present(mapping: Dict[str, Any], keys: List[str], default: Any = None) -> Any:
-    """按候选键读取第一个存在且非空的值。"""
-
-    for key in keys:
-        value = mapping.get(key)
-        if value not in (None, "", []):
-            return value
-    return default
-
-
-def _coerce_bool(value: Any) -> bool:
-    """将模型返回的布尔类值规范化为 bool。"""
-
-    if isinstance(value, bool):
-        return value
-    normalized_value = str(value or "").strip().lower()
-    return normalized_value in {"true", "yes", "y", "1", "similar", "相似", "是", "一致"}
-
-
-def _normalize_choice(value: Any, allowed_values: List[str], alias_map: Dict[str, str], default: str) -> str:
-    """规范化模型返回的枚举值。"""
-
-    normalized_value = str(value or "").strip().lower()
-    if not normalized_value:
-        return default
-    if normalized_value in allowed_values:
-        return normalized_value
-    return alias_map.get(normalized_value, default)
-
-
-def _to_plain_list(value: Any) -> List[str]:
-    """将任意列表值规范化为字符串列表。"""
-
-    if not isinstance(value, list):
-        return []
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
 def _build_identity_tool_unavailable_result(reason: str, debug_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """构造图片比对工具不可用时的兜底结果。"""
 
@@ -446,7 +126,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件")
-    config_version: str = Field(default="1.3.0", description="配置版本")
+    config_version: str = Field(default="1.0.0", description="配置版本")
 
 
 class IdentityImageConfig(PluginConfigBase):
@@ -482,7 +162,6 @@ class SearchConfig(PluginConfigBase):
     __ui_order__ = 2
 
     default_limit: int = Field(default=5, ge=1, le=20, description="默认返回条数")
-    recent_message_scan_limit: int = Field(default=80, ge=10, le=500, description="按消息 ID 查图时扫描的最近消息数")
 
 
 class SelfIdentityPluginConfig(PluginConfigBase):
@@ -680,178 +359,6 @@ class SelfIdentityPlugin(MaiBotPlugin):
         if not qq_account.isdigit():
             return "", f"bot.qq_account 不是有效 QQ 号：{qq_account}"
         return qq_account, ""
-
-    @staticmethod
-    def _extract_image_from_message(message: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """从消息中提取第一张图片。"""
-
-        image_format, image_base64, error, _ = SelfIdentityPlugin._extract_image_from_message_with_debug(message)
-        return image_format, image_base64, error
-
-    @staticmethod
-    def _extract_image_from_message_with_debug(
-        message: Dict[str, Any],
-    ) -> Tuple[Optional[str], Optional[str], Optional[str], Dict[str, Any]]:
-        """从消息中提取第一张图片，并保留失败排查信息。"""
-
-        debug_info: Dict[str, Any] = {
-            "message_id": str(message.get("message_id") or "").strip(),
-            "message_keys": sorted(str(key) for key in message.keys()),
-            "raw_message_type": type(message.get("raw_message")).__name__,
-            "image_components": [],
-        }
-
-        raw_message = message.get("raw_message")
-        if not isinstance(raw_message, list):
-            logger.info(
-                "identiy_myself_in_pic 无法读取图片：raw_message 不是列表，message_id=%s raw_type=%s keys=%s",
-                debug_info["message_id"],
-                debug_info["raw_message_type"],
-                debug_info["message_keys"],
-            )
-            return None, None, "目标消息结构不合法，无法读取图片。", debug_info
-
-        debug_info["raw_message_len"] = len(raw_message)
-        logger.info(
-            "identiy_myself_in_pic 开始解析目标消息图片：message_id=%s raw_message_len=%s",
-            debug_info["message_id"],
-            len(raw_message),
-        )
-
-        for index, component in enumerate(raw_message):
-            if not isinstance(component, dict):
-                continue
-            if str(component.get("type") or "").strip().lower() != "image":
-                continue
-
-            component_debug: Dict[str, Any] = {
-                "index": index,
-                "keys": sorted(str(key) for key in component.keys()),
-                "data_type": type(component.get("data")).__name__,
-                "data_preview": _safe_preview(component.get("data")),
-                "has_binary_data_base64": bool(str(component.get("binary_data_base64") or "").strip()),
-                "references": [],
-            }
-            debug_info["image_components"].append(component_debug)
-
-            binary_data_base64 = str(component.get("binary_data_base64") or "").strip()
-            if binary_data_base64:
-                component_debug["binary_data_base64_len"] = len(binary_data_base64)
-                image_result = _decode_base64_image(binary_data_base64)
-                if image_result is not None:
-                    image_format, image_base64 = image_result
-                    logger.info(
-                        "identiy_myself_in_pic 从 binary_data_base64 解析图片成功：message_id=%s component_index=%s format=%s",
-                        debug_info["message_id"],
-                        index,
-                        image_format,
-                    )
-                    return image_format, image_base64, None, debug_info
-                component_debug["binary_data_base64_decode"] = "failed"
-                logger.info(
-                    "identiy_myself_in_pic binary_data_base64 解码失败：message_id=%s component_index=%s len=%s",
-                    debug_info["message_id"],
-                    index,
-                    len(binary_data_base64),
-                )
-
-            image_hash = _extract_image_hash(component)
-            component_debug["hash"] = f"{image_hash[:12]}...<len={len(image_hash)}>" if image_hash else ""
-            image_result, cache_reason = _read_cached_image_by_hash_with_reason(image_hash)
-            component_debug["cache_lookup"] = cache_reason
-            if image_result is not None:
-                image_format, image_base64 = image_result
-                logger.info(
-                    "identiy_myself_in_pic 从图片缓存解析成功：message_id=%s component_index=%s hash=%s format=%s",
-                    debug_info["message_id"],
-                    index,
-                    component_debug["hash"],
-                    image_format,
-                )
-                return image_format, image_base64, None, debug_info
-            logger.info(
-                "identiy_myself_in_pic 图片缓存未命中：message_id=%s component_index=%s hash=%s reason=%s",
-                debug_info["message_id"],
-                index,
-                component_debug["hash"],
-                cache_reason,
-            )
-
-            references = []
-            references.extend(_iter_image_reference_values(component.get("data")))
-            references.extend(_iter_image_reference_values(component.get("url")))
-            references.extend(_iter_image_reference_values(component.get("file")))
-            references.extend(_iter_image_reference_values(component.get("file_path")))
-            references.extend(_iter_image_reference_values(component.get("path")))
-            references.extend(_iter_image_reference_values(component.get("data_url")))
-            for reference in references:
-                image_result, reference_reason = _read_image_reference_with_reason(reference)
-                component_debug["references"].append(
-                    {
-                        "kind": _classify_image_reference(reference),
-                        "preview": _safe_preview(reference),
-                        "result": reference_reason,
-                    }
-                )
-                if image_result is not None:
-                    image_format, image_base64 = image_result
-                    logger.info(
-                        "identiy_myself_in_pic 从图片引用解析成功：message_id=%s component_index=%s kind=%s format=%s",
-                        debug_info["message_id"],
-                        index,
-                        _classify_image_reference(reference),
-                        image_format,
-                    )
-                    return image_format, image_base64, None, debug_info
-
-            logger.info(
-                "identiy_myself_in_pic 图片组件解析失败：message_id=%s component_index=%s keys=%s reference_count=%s",
-                debug_info["message_id"],
-                index,
-                component_debug["keys"],
-                len(references),
-            )
-
-            return None, None, "目标消息里有图片标记，但拿不到可供比对的图片二进制内容。", debug_info
-
-        logger.info(
-            "identiy_myself_in_pic 目标消息中没有图片组件：message_id=%s raw_message_len=%s",
-            debug_info["message_id"],
-            len(raw_message),
-        )
-        return None, None, "目标消息中没有图片。", debug_info
-
-    async def _find_message_by_id(
-        self,
-        stream_id: str,
-        msg_id: str,
-    ) -> Optional[Dict[str, Any]]:
-        """通过 Host 提供的单条消息查询能力按消息 ID 查找目标消息。"""
-
-        normalized_stream_id = stream_id.strip()
-        normalized_msg_id = msg_id.strip()
-        if not normalized_stream_id or not normalized_msg_id:
-            return None
-
-        lookup_result = await self.ctx.call_capability(
-            "message.get_by_id",
-            message_id=normalized_msg_id,
-            chat_id=normalized_stream_id,
-        )
-        if not isinstance(lookup_result, dict):
-            raise RuntimeError("message.get_by_id 返回格式异常。")
-        capability_result = _extract_nested_mapping(lookup_result)
-        if lookup_result.get("success") is False or capability_result.get("success") is False:
-            raise RuntimeError(
-                str(capability_result.get("error") or lookup_result.get("error") or "message.get_by_id 查询失败。")
-            )
-
-        direct_message = capability_result.get("message")
-        if direct_message is None:
-            return None
-        if not isinstance(direct_message, dict):
-            raise RuntimeError("message.get_by_id 返回的 message 字段格式异常。")
-        return direct_message
 
     @staticmethod
     def _score_info_item(item: IdentityInfoItem, title: str, keyword: str, query: str) -> float:
