@@ -26,7 +26,7 @@
 
 ## 致谢
 
-本项目基于上游项目 [self_identity_plugin](https://github.com/SengokuCola/self_identity_plugin)（已停止维护）修改而来。
+本项目基于 [self_identity_plugin](https://github.com/SengokuCola/self_identity_plugin)（上游已停止维护）修改而来，感谢原作者 [SengokuCola](https://github.com/SengokuCola) 的原始工作。
 
 ## 许可证
 
