@@ -133,7 +133,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.4.1",
+        default="1.4.2",
         description="配置版本",
         json_schema_extra={"label": "配置版本", "hidden": True},
     )
@@ -149,12 +149,18 @@ class IdentityImageConfig(PluginConfigBase):
     image_dir: str = Field(
         default=_SELF_IMAGE_DIR_NAME,
         description="人设原图目录，支持插件目录相对路径或绝对路径",
-        json_schema_extra={"label": "人设原图目录"},
+        json_schema_extra={
+            "label": "人设原图目录",
+            "hint": "支持绝对路径；请确保指向可信位置",
+        },
     )
     thumbnail_dir: str = Field(
         default=_SELF_IMAGE_THUMB_DIR_NAME,
         description="人设图缩略图目录，支持插件目录相对路径或绝对路径",
-        json_schema_extra={"label": "人设缩略图目录"},
+        json_schema_extra={
+            "label": "人设缩略图目录",
+            "hint": "缩略图将写入该目录，支持绝对路径，请确保指向可信位置",
+        },
     )
 
 
