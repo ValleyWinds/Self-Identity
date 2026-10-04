@@ -2,3 +2,7 @@ config.toml
 config_back/
 __pycache__/
 *.pyc
+self_image/*
+!self_image/.gitkeep
+image_thumbup/*
+!image_thumbup/.gitkeep
