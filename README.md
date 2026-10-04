@@ -2,12 +2,15 @@
 
 为 MaiBot 提供 Bot 自我信息检索、人设图库浏览、自我人设图片返回，以及自己的 QQ 头像获取能力。
 
+> 本仓库 fork 自 [SengokuCola/self_identity_plugin](https://github.com/SengokuCola/self_identity_plugin)（上游已停止维护），由 [ValleyWinds](https://github.com/ValleyWinds) 维护。
+
 ## 插件信息
 
-- 版本：`1.3.0`
+- 版本：`1.4.0`
 - 分类：聊天
 - 图标：镜子
 - 插件 ID：`sengokucola.self-identity-plugin`
+- 适配要求：MaiBot（Host）`1.3.0` 及以上，插件 SDK `2.x`
 
 ## 功能
 
