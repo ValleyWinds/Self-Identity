@@ -1,8 +1,4 @@
+config.toml
+config_back/
 __pycache__/
-*.py[cod]
-.pytest_cache/
-.ruff_cache/
-.venv/
-venv/
-image_thumbup/*
-!image_thumbup/.gitkeep
+*.pyc
