@@ -127,8 +127,16 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_icon__ = "package"
     __ui_order__ = 0
 
-    enabled: bool = Field(default=True, description="是否启用插件")
-    config_version: str = Field(default="1.4.0", description="配置版本")
+    enabled: bool = Field(
+        default=True,
+        description="是否启用插件",
+        json_schema_extra={"label": "启用插件"},
+    )
+    config_version: str = Field(
+        default="1.4.1",
+        description="配置版本",
+        json_schema_extra={"label": "配置版本", "hidden": True},
+    )
 
 
 class IdentityImageConfig(PluginConfigBase):
@@ -141,10 +149,12 @@ class IdentityImageConfig(PluginConfigBase):
     image_dir: str = Field(
         default=_SELF_IMAGE_DIR_NAME,
         description="人设原图目录，支持插件目录相对路径或绝对路径",
+        json_schema_extra={"label": "人设原图目录"},
     )
     thumbnail_dir: str = Field(
         default=_SELF_IMAGE_THUMB_DIR_NAME,
         description="人设图缩略图目录，支持插件目录相对路径或绝对路径",
+        json_schema_extra={"label": "人设缩略图目录"},
     )
 
 
@@ -163,7 +173,31 @@ class SearchConfig(PluginConfigBase):
     __ui_icon__ = "search"
     __ui_order__ = 2
 
-    default_limit: int = Field(default=5, ge=1, le=20, description="默认返回条数")
+    default_limit: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="默认返回条数",
+        json_schema_extra={"label": "检索默认返回条数"},
+    )
+
+
+class InfosSectionConfig(PluginConfigBase):
+    """自我信息配置节。
+
+    infos 必须放在命名节内：SDK 会把根级字段归入 WebUI 的 general 虚拟节，
+    而前端按 ``config[节名][字段名]`` 取值，根级字段在配置表单里永远取不到值（前端 1.3.x 未修）。
+    """
+
+    __ui_label__ = "自我信息"
+    __ui_icon__ = "notes"
+    __ui_order__ = 3
+
+    infos: List[IdentityInfoItem] = Field(
+        default_factory=list,
+        description="Bot 的自我信息列表",
+        json_schema_extra={"label": "自我信息列表"},
+    )
 
 
 class SelfIdentityPluginConfig(PluginConfigBase):
@@ -172,7 +206,7 @@ class SelfIdentityPluginConfig(PluginConfigBase):
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     identity_image: IdentityImageConfig = Field(default_factory=IdentityImageConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
-    infos: List[IdentityInfoItem] = Field(default_factory=list, description="Bot 的自我信息列表")
+    infos_section: InfosSectionConfig = Field(default_factory=InfosSectionConfig)
 
 
 class SelfIdentityPlugin(MaiBotPlugin):
@@ -447,7 +481,7 @@ class SelfIdentityPlugin(MaiBotPlugin):
             normalized_limit = 0
         if normalized_limit <= 0:
             normalized_limit = self.config.search.default_limit
-        infos = self.config.infos
+        infos = self.config.infos_section.infos
         if not infos:
             return {
                 "success": False,
