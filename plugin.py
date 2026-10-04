@@ -183,16 +183,14 @@ class SearchConfig(PluginConfigBase):
 
 
 class InfosSectionConfig(PluginConfigBase):
-    """自我信息配置节。
-
-    infos 必须放在命名节内：SDK 会把根级字段归入 WebUI 的 general 虚拟节，
-    而前端按 ``config[节名][字段名]`` 取值，根级字段在配置表单里永远取不到值（前端 1.3.x 未修）。
-    """
+    """Bot 的自我信息内容，供 Bot 检索回答关于自己的问题。"""
 
     __ui_label__ = "自我信息"
     __ui_icon__ = "notes"
     __ui_order__ = 3
 
+    # infos 必须放在命名节内：SDK 会把根级字段归入 WebUI 的 general 虚拟节，
+    # 而前端按 config[节名][字段名] 取值，根级字段在配置表单里永远取不到值（前端 1.3.x 未修）。
     infos: List[IdentityInfoItem] = Field(
         default_factory=list,
         description="Bot 的自我信息列表",
