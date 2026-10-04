@@ -11,7 +11,7 @@
 ## 安装
 
 - 推荐方式：在 MaiBot WebUI 的「插件市场」中搜索 `自我信息插件` 或 `Self Identity`，一键安装。
-- 手动方式：把本仓库克隆或下载到 MaiBot 的 `plugins` 目录，重启 MaiBot。
+- 手动方式：把本仓库克隆或下载到 MaiBot 的 `plugins` 目录，然后在 WebUI 的「插件管理」页重新加载即可（插件支持热加载，一般无需重启 MaiBot）。
 
 需要 MaiBot 1.3.0 或更高版本；插件 ID 为 `valleywinds.self-identity`。
 
