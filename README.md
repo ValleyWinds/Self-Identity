@@ -20,10 +20,15 @@
 
 ## 安装
 
+推荐在 MaiBot WebUI 的「插件市场」中搜索 `自我信息插件` 或 `Self Identity` 一键安装。
+
+也可以手动安装：
+
 1. 将本仓库克隆或下载到 MaiBot 的 `plugins` 目录中。
-2. 确认已安装 MaiBot 插件 SDK 2.x。
-3. 在 WebUI 或 `config.toml` 中按需要修改自我信息与人设图库配置。
-4. 重启 MaiBot 或重新加载插件。
+2. 在 WebUI 或 `config.toml` 中按需要修改自我信息与人设图库配置。
+3. 重启 MaiBot 或重新加载插件。
+
+无需手动安装插件 SDK——它由 MaiBot 主程序自动提供。
 
 > 本插件与旧版 `sengokucola.self-identity-plugin` 是两个独立插件（ID 不同）。如果之前安装过旧版，请先卸载旧版再安装本插件，避免功能重复。
 
@@ -48,7 +53,7 @@
 
 ## 许可证
 
-本项目以 [GPL-3.0-or-later](LICENSE)（GNU 通用公共许可证第 3 版或更新版本）发布。
+本项目以 GPL-3.0-or-later（GNU 通用公共许可证第 3 版或更新版本）发布，全文见本仓库的 `LICENSE` 文件。
 
 ## 致谢
 
