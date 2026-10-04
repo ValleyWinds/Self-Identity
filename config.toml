@@ -35,7 +35,7 @@ full_information = "图里和我一起出现的橙色萨卡班甲鱼造型小伙
 
 [plugin]
 enabled = true
-config_version = "1.3.0"
+config_version = "1.0.0"
 
 [identity_image]
 image_dir = "self_image"
@@ -43,4 +43,3 @@ thumbnail_dir = "image_thumbup"
 
 [search]
 default_limit = 5
-recent_message_scan_limit = 80

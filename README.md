@@ -1,16 +1,15 @@
-# 自我信息插件 (Self Identity Plugin)
+# 自我信息插件 (Self Identity)
 
 为 MaiBot 提供 Bot 自我信息检索、人设图库浏览、自我人设图片返回，以及自己的 QQ 头像获取能力。
 
-> 本仓库 fork 自 [SengokuCola/self_identity_plugin](https://github.com/SengokuCola/self_identity_plugin)（上游已停止维护），由 [ValleyWinds](https://github.com/ValleyWinds) 维护。
-
 ## 插件信息
 
-- 版本：`1.4.0`
+- 版本：`1.0.0`
 - 分类：聊天
 - 图标：镜子
-- 插件 ID：`sengokucola.self-identity-plugin`
+- 插件 ID：`valleywinds.self-identity`
 - 适配要求：MaiBot（Host）`1.3.0` 及以上，插件 SDK `2.x`
+- 开源协议：GPL-3.0-or-later
 
 ## 功能
 
@@ -26,16 +25,17 @@
 3. 在 WebUI 或 `config.toml` 中按需要修改自我信息与人设图库配置。
 4. 重启 MaiBot 或重新加载插件。
 
+> 本插件与旧版 `sengokucola.self-identity-plugin` 是两个独立插件（ID 不同）。如果之前安装过旧版，请先卸载旧版再安装本插件，避免功能重复。
+
 ## 配置
 
 默认配置位于 `config.toml`。
 
 - `plugin.enabled`：是否启用插件。
-- `plugin.config_version`：插件配置版本，当前为 `1.3.0`。
+- `plugin.config_version`：插件配置版本，当前为 `1.0.0`。
 - `identity_image.image_dir`：人设原图目录，支持插件目录相对路径或绝对路径。
 - `identity_image.thumbnail_dir`：人设图缩略图目录，支持插件目录相对路径或绝对路径。
 - `search.default_limit`：自我信息检索默认返回条数。
-- `search.recent_message_scan_limit`：按消息 ID 查图时扫描的最近消息数。
 - `infos`：Bot 自我信息列表，每项包含标题、关键词和完整说明。
 
 `get_self_avatar` 依赖主程序配置中的 `bot.qq_account`。如果该字段为空或为 `0`，工具会返回失败提示，不会尝试下载头像。
@@ -48,4 +48,8 @@
 
 ## 许可证
 
-本项目使用 MIT License。
+本项目以 [GPL-3.0-or-later](LICENSE)（GNU 通用公共许可证第 3 版或更新版本）发布。
+
+## 致谢
+
+本项目基于 [SengokuCola/self_identity_plugin](https://github.com/SengokuCola/self_identity_plugin)（上游已停止维护）修改而来，感谢原作者 [SengokuCola](https://github.com/SengokuCola) 的原始工作。

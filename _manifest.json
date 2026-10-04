@@ -1,13 +1,13 @@
 {
   "manifest_version": 2,
-  "version": "1.4.0",
-  "name": "自我信息插件 (Self Identity Plugin)",
+  "version": "1.0.0",
+  "name": "自我信息插件 (Self Identity)",
   "description": "为 Bot 提供自我信息检索、人设图库浏览、自我图片与 QQ 头像获取能力",
   "author": {
-    "name": "SengokuCola",
-    "url": "https://github.com/SengokuCola"
+    "name": "ValleyWinds",
+    "url": "https://github.com/ValleyWinds"
   },
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "plugin_type": "chat",
   "urls": {
     "repository": "https://github.com/ValleyWinds/Self-Identity",
@@ -25,8 +25,7 @@
   },
   "dependencies": [],
   "capabilities": [
-    "config.get",
-    "message.get_by_id"
+    "config.get"
   ],
   "display": {
     "icon": {
@@ -42,5 +41,5 @@
       "zh-CN"
     ]
   },
-  "id": "sengokucola.self-identity-plugin"
+  "id": "valleywinds.self-identity"
 }
