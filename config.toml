@@ -35,7 +35,7 @@ full_information = "图里和我一起出现的橙色萨卡班甲鱼造型小伙
 
 [plugin]
 enabled = true
-config_version = "1.0.0"
+config_version = "1.4.0"
 
 [identity_image]
 image_dir = "self_image"

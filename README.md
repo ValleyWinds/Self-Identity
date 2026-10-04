@@ -4,7 +4,7 @@
 
 ## 插件信息
 
-- 版本：`1.0.0`
+- 版本：`1.4.0`（版本线接续上游最后的 1.3.1，避免与旧版 `sengokucola.self-identity-plugin` 的版本号混淆）
 - 分类：聊天
 - 图标：镜子
 - 插件 ID：`valleywinds.self-identity`
@@ -32,7 +32,7 @@
 默认配置位于 `config.toml`。
 
 - `plugin.enabled`：是否启用插件。
-- `plugin.config_version`：插件配置版本，当前为 `1.0.0`。
+- `plugin.config_version`：插件配置版本，当前为 `1.4.0`。
 - `identity_image.image_dir`：人设原图目录，支持插件目录相对路径或绝对路径。
 - `identity_image.thumbnail_dir`：人设图缩略图目录，支持插件目录相对路径或绝对路径。
 - `search.default_limit`：自我信息检索默认返回条数。
