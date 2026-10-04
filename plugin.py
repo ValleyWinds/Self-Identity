@@ -21,6 +21,7 @@ from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 _MAX_DOWNLOAD_IMAGE_BYTES = 15 * 1024 * 1024
 _MAX_LOCAL_IMAGE_BYTES = 5 * 1024 * 1024
+_MAX_IMAGE_PIXELS = 40_000_000
 _IMAGE_FORMAT_NAMES = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
 _SELF_IMAGE_DIR_NAME = "self_image"
 _SELF_IMAGE_THUMB_DIR_NAME = "image_thumbup"
@@ -133,7 +134,7 @@ class PluginSectionConfig(PluginConfigBase):
         json_schema_extra={"label": "启用插件"},
     )
     config_version: str = Field(
-        default="1.4.2",
+        default="1.4.3",
         description="配置版本",
         json_schema_extra={"label": "配置版本", "hidden": True},
     )
@@ -240,13 +241,23 @@ class SelfIdentityPlugin(MaiBotPlugin):
         del version
 
     def _resolve_configured_dir(self, configured_path: str, default_name: str) -> Path:
-        """解析插件配置中的目录路径。"""
+        """解析插件配置中的目录路径。
+
+        绝对路径按原样使用（供图库存放于数据盘等场景，配置页有可信位置提示）；
+        相对路径解析后必须落在插件目录内，越界（如 ``../../``）视为非法配置并回退默认目录。
+        """
 
         normalized_path = configured_path.strip() or default_name
         directory_path = Path(normalized_path)
-        if not directory_path.is_absolute():
-            directory_path = (self.plugin_dir / directory_path).resolve()
-        return directory_path
+        if directory_path.is_absolute():
+            return directory_path
+        resolved_path = (self.plugin_dir / directory_path).resolve()
+        try:
+            resolved_path.relative_to(self.plugin_dir)
+        except ValueError:
+            logger.warning("配置目录 %s 越出插件目录，回退默认目录 %s", configured_path, default_name)
+            return (self.plugin_dir / default_name).resolve()
+        return resolved_path
 
     @property
     def self_image_dir(self) -> Path:
@@ -305,10 +316,14 @@ class SelfIdentityPlugin(MaiBotPlugin):
 
     @staticmethod
     def _generate_thumbnail(image_path: Path, thumbnail_path: Path) -> None:
-        """生成单张人设图的缩略图。"""
+        """生成单张人设图的缩略图，解码前校验像素上限以防御压缩炸弹。"""
 
         thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
         with Image.open(image_path) as image:
+            if image.width * image.height > _MAX_IMAGE_PIXELS:
+                raise ValueError(
+                    f"图片像素 {image.width}x{image.height} 超过 {_MAX_IMAGE_PIXELS} 上限，已跳过以防止资源耗尽"
+                )
             image.thumbnail(_SELF_IMAGE_THUMB_SIZE, Image.Resampling.LANCZOS)
             if image.mode not in {"RGB", "RGBA"}:
                 image = image.convert("RGBA")

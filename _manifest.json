@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "version": "1.4.2",
+  "version": "1.4.3",
   "name": "自我信息插件 (Self Identity)",
   "description": "为 Bot 提供自我信息检索、人设图库浏览、自我图片与 QQ 头像获取能力",
   "author": {
@@ -27,7 +27,7 @@
     {
       "type": "python_package",
       "name": "pillow",
-      "version_spec": ">=12.3.0"
+      "version_spec": ">=10.0.0"
     }
   ],
   "capabilities": [
