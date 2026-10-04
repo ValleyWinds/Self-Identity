@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -19,13 +20,15 @@ from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 
 _MAX_DOWNLOAD_IMAGE_BYTES = 15 * 1024 * 1024
+_MAX_LOCAL_IMAGE_BYTES = 5 * 1024 * 1024
+_IMAGE_FORMAT_NAMES = {"jpg", "jpeg", "png", "webp", "gif", "bmp"}
 _SELF_IMAGE_DIR_NAME = "self_image"
 _SELF_IMAGE_THUMB_DIR_NAME = "image_thumbup"
 _SELF_IMAGE_THUMB_SIZE = (512, 512)
 _SELF_IMAGE_PAGE_SIZE = 10
-_SUPPORTED_SELF_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+_SUPPORTED_SELF_IMAGE_SUFFIXES = {f".{suffix}" for suffix in _IMAGE_FORMAT_NAMES}
 _QQ_AVATAR_URL_TEMPLATE = "https://q1.qlogo.cn/g?b=qq&nk={qq_account}&s=640"
-logger = logging.getLogger("plugin.self_identity_plugin")
+logger = logging.getLogger("plugin.valleywinds.self-identity")
 
 
 def _tool_param(name: str, param_type: ToolParamType, description: str, required: bool) -> ToolParameterInfo:
@@ -38,7 +41,7 @@ def _guess_image_format_from_name(file_name: str, default: str = "png") -> str:
     """根据文件名猜测图片格式。"""
 
     suffix = Path(file_name).suffix.lower().lstrip(".")
-    if suffix in {"jpg", "jpeg", "png", "webp", "gif", "bmp"}:
+    if suffix in _IMAGE_FORMAT_NAMES:
         return "jpeg" if suffix == "jpg" else suffix
     return default
 
@@ -66,9 +69,11 @@ def _image_bytes_to_base64(image_bytes: bytes) -> str:
 
 
 def _read_image_file(image_path: Path) -> Optional[Tuple[str, str]]:
-    """读取本地图片文件并返回格式与 Base64。"""
+    """读取本地图片文件并返回格式与 Base64，超过大小上限时返回 None。"""
 
     if not image_path.exists() or not image_path.is_file():
+        return None
+    if image_path.stat().st_size > _MAX_LOCAL_IMAGE_BYTES:
         return None
     image_bytes = image_path.read_bytes()
     image_format = _guess_image_format_from_bytes(image_bytes, _guess_image_format_from_name(image_path.name))
@@ -105,17 +110,14 @@ def _download_image_url(image_url: str) -> Optional[Tuple[str, str]]:
     return image_format, _image_bytes_to_base64(image_bytes)
 
 
-def _build_identity_tool_unavailable_result(reason: str, debug_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """构造图片比对工具不可用时的兜底结果。"""
+def _build_identity_tool_unavailable_result(reason: str) -> Dict[str, Any]:
+    """构造工具不可用时的兜底结果。"""
 
-    normalized_reason = str(reason or "").strip() or "图片比对工具当前不可用。"
-    result = {
+    normalized_reason = str(reason or "").strip() or "工具当前不可用。"
+    return {
         "success": False,
         "content": normalized_reason,
     }
-    if debug_info:
-        result["debug_info"] = debug_info
-    return result
 
 
 class PluginSectionConfig(PluginConfigBase):
@@ -255,7 +257,7 @@ class SelfIdentityPlugin(MaiBotPlugin):
                 self._generate_thumbnail(image_path, thumbnail_path)
                 generated_count += 1
             except Exception as exc:
-                logger.info("生成人设图缩略图失败：image=%s error=%s", image_path, exc, exc_info=True)
+                logger.warning("生成人设图缩略图失败：image=%s error=%s", image_path, exc, exc_info=True)
         logger.info(
             "人设图库检查完成：image_dir=%s thumbnail_dir=%s generated=%s",
             self.self_image_dir,
@@ -418,7 +420,7 @@ class SelfIdentityPlugin(MaiBotPlugin):
         return "\n".join(lines)
 
     @Tool(
-        "search_self_infomation",
+        "search_self_information",
         description="当有人提及你的信息，包括基本信息，人设，外貌，特征等等，或者你自己的设定信息有利于你进行下一步回复时调用",
         parameters=[
             _tool_param("query", ToolParamType.STRING, "通用搜索词，可为空", False),
@@ -427,7 +429,7 @@ class SelfIdentityPlugin(MaiBotPlugin):
             _tool_param("limit", ToolParamType.INTEGER, "最多返回几条结果", False),
         ],
     )
-    async def handle_search_self_infomation(
+    async def handle_search_self_information(
         self,
         query: str = "",
         title: str = "",
@@ -439,7 +441,12 @@ class SelfIdentityPlugin(MaiBotPlugin):
 
         del kwargs
 
-        normalized_limit = limit if limit > 0 else self.config.search.default_limit
+        try:
+            normalized_limit = int(limit or 0)
+        except (TypeError, ValueError):
+            normalized_limit = 0
+        if normalized_limit <= 0:
+            normalized_limit = self.config.search.default_limit
         infos = self.config.infos
         if not infos:
             return {
@@ -529,7 +536,7 @@ class SelfIdentityPlugin(MaiBotPlugin):
                     thumbnail_path,
                     f"thumb_{record['index']}_{record['name']}.png",
                     {
-                        "source": "self_identity_plugin",
+                        "source": "valleywinds.self-identity",
                         "usage": "self_identity_thumbnail",
                         "image_index": record["index"],
                         "image_id": record["id"],
@@ -563,7 +570,7 @@ class SelfIdentityPlugin(MaiBotPlugin):
                 "content_items": content_items,
             }
         except Exception as exc:
-            logger.info("view_all_image 工具异常：error=%s", exc, exc_info=True)
+            logger.error("view_all_image 工具异常：error=%s", exc, exc_info=True)
             return _build_identity_tool_unavailable_result(f"浏览人设图库失败：{type(exc).__name__}: {exc}")
 
     @Tool(
@@ -577,37 +584,28 @@ class SelfIdentityPlugin(MaiBotPlugin):
     ) -> Dict[str, Any]:
         """获取并返回 Bot 自己的 QQ 头像。"""
 
-        tool_debug_info: Dict[str, Any] = {
-            "kwargs_keys": sorted(str(key) for key in kwargs.keys()),
-        }
+        del kwargs
 
         try:
             qq_account, resolve_error = await self._resolve_bot_qq_account()
             if resolve_error:
-                logger.info("get_self_avatar QQ 号解析失败：reason=%s", resolve_error)
-                return _build_identity_tool_unavailable_result(resolve_error, tool_debug_info)
+                logger.warning("get_self_avatar QQ 号解析失败：reason=%s", resolve_error)
+                return _build_identity_tool_unavailable_result(resolve_error)
 
             avatar_url = _QQ_AVATAR_URL_TEMPLATE.format(qq_account=qq_account)
-            tool_debug_info["qq_account"] = qq_account
-            tool_debug_info["avatar_url"] = avatar_url
 
             try:
-                image_result = _download_image_url(avatar_url)
+                image_result = await asyncio.to_thread(_download_image_url, avatar_url)
             except Exception as exc:
-                logger.info("get_self_avatar 头像下载失败：qq=%s error=%s", qq_account, exc, exc_info=True)
-                return _build_identity_tool_unavailable_result(
-                    f"QQ 头像下载失败：{type(exc).__name__}: {exc}",
-                    tool_debug_info,
-                )
+                logger.error("get_self_avatar 头像下载失败：qq=%s error=%s", qq_account, exc, exc_info=True)
+                return _build_identity_tool_unavailable_result(f"QQ 头像下载失败：{type(exc).__name__}: {exc}")
             if image_result is None:
-                return _build_identity_tool_unavailable_result("QQ 头像下载失败：返回内容不是有效图片。", tool_debug_info)
+                return _build_identity_tool_unavailable_result("QQ 头像下载失败：返回内容不是有效图片。")
 
             image_format, image_base64 = image_result
             image_format = (image_format or "png").strip().lower()
             image_suffix = "jpg" if image_format == "jpeg" else image_format
             mime_type = _build_image_mime_type(image_format)
-            tool_debug_info["image_format"] = image_format
-            tool_debug_info["image_base64_len"] = len(image_base64 or "")
 
             return {
                 "success": True,
@@ -624,22 +622,17 @@ class SelfIdentityPlugin(MaiBotPlugin):
                         "mime_type": mime_type,
                         "name": f"self_avatar_{qq_account}.{image_suffix}",
                         "metadata": {
-                            "source": "self_identity_plugin",
+                            "source": "valleywinds.self-identity",
                             "usage": "self_avatar",
                             "qq_account": qq_account,
                             "avatar_url": avatar_url,
                         },
                     }
                 ],
-                "debug_info": tool_debug_info,
             }
         except Exception as exc:
-            tool_debug_info["exception"] = f"{type(exc).__name__}: {exc}"
-            logger.info("get_self_avatar 工具异常：error=%s", tool_debug_info["exception"], exc_info=True)
-            return _build_identity_tool_unavailable_result(
-                f"获取自己的头像失败：{type(exc).__name__}: {exc}",
-                tool_debug_info,
-            )
+            logger.error("get_self_avatar 工具异常：error=%s", exc, exc_info=True)
+            return _build_identity_tool_unavailable_result(f"获取自己的头像失败：{type(exc).__name__}: {exc}")
 
     @Tool(
         "get_self_image",
@@ -660,51 +653,33 @@ class SelfIdentityPlugin(MaiBotPlugin):
     ) -> Dict[str, Any]:
         """返回指定人设图原图，供主模型自行进行图片判断。"""
 
-        tool_debug_info: Dict[str, Any] = {
-            "image_index": image_index,
-            "image_name": image_name.strip(),
-            "kwargs_keys": sorted(str(key) for key in kwargs.keys()),
-        }
-        logger.info(
-            "get_self_image 工具调用开始：image_index=%s image_name=%s kwargs_keys=%s",
-            image_index,
-            image_name,
-            tool_debug_info["kwargs_keys"],
-        )
+        del kwargs
 
         try:
             record, resolve_error = self._resolve_self_image_record(image_name=image_name, image_index=image_index)
             if record is None:
-                logger.info("get_self_image 人设图解析失败：reason=%s", resolve_error)
-                return _build_identity_tool_unavailable_result(resolve_error, tool_debug_info)
+                logger.warning("get_self_image 人设图解析失败：reason=%s", resolve_error)
+                return _build_identity_tool_unavailable_result(resolve_error)
 
             image_path = record["path"]
+            if image_path.is_file() and image_path.stat().st_size > _MAX_LOCAL_IMAGE_BYTES:
+                return _build_identity_tool_unavailable_result(
+                    f"人设原图 {record['name']} 超过 {_MAX_LOCAL_IMAGE_BYTES // (1024 * 1024)}MB 上限，无法整张返回。"
+                    "请改用 view_all_image 查看对应缩略图。"
+                )
+
             image_result = _read_image_file(image_path)
             if image_result is None:
-                return _build_identity_tool_unavailable_result(f"人设图片读取失败：{image_path}", tool_debug_info)
+                return _build_identity_tool_unavailable_result(f"人设图片读取失败：{image_path}")
 
             image_format, image_base64 = image_result
             image_format = (image_format or "png").strip().lower()
             mime_type = _build_image_mime_type(image_format)
-            tool_debug_info["image_format"] = image_format
-            tool_debug_info["image_base64_len"] = len(image_base64 or "")
-            tool_debug_info["resolved_image"] = {
-                "index": record["index"],
-                "id": record["id"],
-                "name": record["name"],
-            }
-            logger.info(
-                "get_self_image 人设图解析成功：index=%s name=%s image_format=%s base64_len=%s",
-                record["index"],
-                record["name"],
-                image_format,
-                tool_debug_info["image_base64_len"],
-            )
             return {
                 "success": True,
                 "content": (
                     f"已返回第 {record['index']} 张 Bot 人设原图：{record['name']}。"
-                    "请将这张图片作为自我形象参考，与当前对话中的目标图片自行进行视觉判断。"
+                    "请将这张图片作为自我形象参考。"
                 ),
                 "image_index": record["index"],
                 "image_id": record["id"],
@@ -719,7 +694,7 @@ class SelfIdentityPlugin(MaiBotPlugin):
                         "mime_type": mime_type,
                         "name": str(record["name"]),
                         "metadata": {
-                            "source": "self_identity_plugin",
+                            "source": "valleywinds.self-identity",
                             "usage": "self_identity_reference",
                             "image_index": record["index"],
                             "image_id": record["id"],
@@ -727,19 +702,10 @@ class SelfIdentityPlugin(MaiBotPlugin):
                         },
                     }
                 ],
-                "debug_info": tool_debug_info,
             }
         except Exception as exc:
-            tool_debug_info["exception"] = f"{type(exc).__name__}: {exc}"
-            logger.info(
-                "get_self_image 工具异常：error=%s",
-                tool_debug_info["exception"],
-                exc_info=True,
-            )
-            return _build_identity_tool_unavailable_result(
-                f"人设图片工具暂时不可用：{type(exc).__name__}: {exc}",
-                tool_debug_info,
-            )
+            logger.error("get_self_image 工具异常：error=%s", exc, exc_info=True)
+            return _build_identity_tool_unavailable_result(f"人设图片工具暂时不可用：{type(exc).__name__}: {exc}")
 
 
 def create_plugin() -> SelfIdentityPlugin:
