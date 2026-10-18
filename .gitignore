@@ -7,6 +7,9 @@ self_image/*
 image_thumbup/*
 !image_thumbup/.gitkeep
 
+# ZCode 本地工具配置（不随插件仓库发布）
+.zcodeignore
+
 # 通用防御：密钥/环境变量、日志、临时与系统文件、虚拟环境、IDE
 .env
 .env.*
