@@ -7,6 +7,20 @@ self_image/*
 image_thumbup/*
 !image_thumbup/.gitkeep
 
+# 通用防御：密钥/环境变量、日志、临时与系统文件、虚拟环境、IDE
+.env
+.env.*
+*.log
+*.tmp
+*.bak
+.venv/
+venv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
 # ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
 .git/
 .hg/
