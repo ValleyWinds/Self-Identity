@@ -8,7 +8,6 @@
     "url": "https://github.com/ValleyWinds"
   },
   "license": "GPL-3.0-or-later",
-  "plugin_type": "chat",
   "urls": {
     "repository": "https://github.com/ValleyWinds/Self-Identity",
     "homepage": "https://github.com/ValleyWinds/Self-Identity",
@@ -17,7 +16,7 @@
   },
   "host_application": {
     "min_version": "1.3.0",
-    "max_version": "999.999.999"
+    "max_version": "1.3.99"
   },
   "sdk": {
     "min_version": "2.0.0",
