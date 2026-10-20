@@ -39,3 +39,5 @@
 ## 许可证
 
 本项目以 GPL-3.0-or-later（GNU 通用公共许可证第 3 版或更新版本）发布，全文见本仓库的 `LICENSE` 文件。
+
+其中源自上游的原始代码部分，依原作者 SengokuCola 的 MIT 许可证条款保留版权声明，全文见本仓库的 `LICENSE.upstream` 文件。
