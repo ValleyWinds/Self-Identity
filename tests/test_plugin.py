@@ -55,9 +55,9 @@ def test_default_config(plugin_module):
     assert config.identity_image.image_dir == "self_image"
     infos = config.infos_section.infos
     assert len(infos) == 1
-    assert infos[0].title == "她不做的那些事"
-    assert "打游戏" in infos[0].keywords
-    assert "不打游戏" in infos[0].full_information
+    assert infos[0].title == "她最喜欢的饮料"
+    assert "奶茶" in infos[0].keywords
+    assert "乌龙奶盖" in infos[0].full_information
 
 
 def test_config_injection(plugin):

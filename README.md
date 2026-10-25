@@ -32,6 +32,12 @@
 
 **头像功能不可用？** 请在主程序配置中把 `bot.qq_account` 设置为 Bot 自己的 QQ 号，留空或为 `0` 时头像功能会提示失败。
 
+**让自我信息检索更可靠（建议）**：Bot 不一定每次都主动调用自我信息检索。如果发现它经常凭空编自己的设定，可以在人格配置的「行为风格」里加一句引导，例如：
+
+> 问到她自己的细节（长相、经历、口味、在写什么），先用 `search_self_information` 查一下再答。
+
+加上这句后，插件工具会被更稳定地调用。
+
 ## 致谢
 
 本项目基于 [self_identity_plugin](https://github.com/SengokuCola/self_identity_plugin)（上游已停止维护）修改而来，感谢原作者 [SengokuCola](https://github.com/SengokuCola) 的原始工作。
