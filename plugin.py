@@ -186,6 +186,21 @@ class SearchConfig(PluginConfigBase):
     )
 
 
+def _default_infos() -> List[IdentityInfoItem]:
+    """新装插件的自我信息默认值：放一条示范，用户按自己 Bot 的人设改写。"""
+
+    return [
+        IdentityInfoItem(
+            title="她不做的那些事",
+            keywords=["打游戏", "连麦", "语音", "见面", "视频", "照片", "开黑", "唱歌"],
+            full_information=(
+                "不打游戏，不连麦，不语音，不见面，不发自己的照片和视频。"
+                "被约这些一律推掉，不解释理由，也不答应「下次」。"
+            ),
+        )
+    ]
+
+
 class InfosSectionConfig(PluginConfigBase):
     """Bot 的自我信息内容，供 Bot 检索回答关于自己的问题。"""
 
@@ -196,7 +211,7 @@ class InfosSectionConfig(PluginConfigBase):
     # infos 必须放在命名节内：SDK 会把根级字段归入 WebUI 的 general 虚拟节，
     # 而前端按 config[节名][字段名] 取值，根级字段在配置表单里永远取不到值（前端 1.3.x 未修）。
     infos: List[IdentityInfoItem] = Field(
-        default_factory=list,
+        default_factory=_default_infos,
         description="Bot 的自我信息列表",
         json_schema_extra={"label": "自我信息列表"},
     )
