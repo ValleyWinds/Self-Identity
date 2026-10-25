@@ -128,13 +128,10 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_icon__ = "package"
     __ui_order__ = 0
 
-    enabled: bool = Field(
-        default=True,
-        description="是否启用插件",
-        json_schema_extra={"label": "启用插件"},
-    )
+    # [plugin].enabled 是宿主保留键（激活门禁与 WebUI 顶部启停开关），由宿主直接读写，
+    # 配置模型不声明它；声明了会在配置页多出一个与顶部开关同键的冗余开关。
     config_version: str = Field(
-        default="1.4.3",
+        default="1.4.4",
         description="配置版本",
         json_schema_extra={"label": "配置版本", "hidden": True},
     )
